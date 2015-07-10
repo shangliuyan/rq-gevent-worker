@@ -15,7 +15,7 @@ try: # for rq >= 0.5.0
 except ImportError: # for rq <= 0.4.6 
     from rq.job import Status as JobStatus
 from rq.timeouts import BaseDeathPenalty, JobTimeoutException
-from rq.worker import StopRequested, green, blue
+from rq.worker import StopRequested, green, blue, WorkerStatus
 from rq.exceptions import DequeueTimeout
 from rq.logutils import setup_loghandlers
 from rq.version import VERSION
@@ -39,6 +39,7 @@ class GeventWorker(Worker):
         if 'pool_size' in kwargs:
             pool_size = kwargs.pop('pool_size')
         self.gevent_pool = gevent.pool.Pool(pool_size)
+        self.gevent_worker = None
         super(GeventWorker, self).__init__(*args, **kwargs)
 
     def register_birth(self):
@@ -57,7 +58,7 @@ class GeventWorker(Worker):
             raise SystemExit()
 
         def request_stop():
-            if not self._stopped:
+            if not self._stop_requested:
                 gevent.signal(signal.SIGINT, request_force_stop)
                 gevent.signal(signal.SIGTERM, request_force_stop)
 
@@ -65,10 +66,10 @@ class GeventWorker(Worker):
                 self.log.warning('Stopping after all greenlets are finished. '
                                  'Press Ctrl+C again for a cold shutdown.')
 
-                self._stopped = True
+                self._stop_requested = True
                 self.gevent_pool.join()
-
-            raise StopRequested()
+                if self.gevent_worker is not None:
+                    self.gevent_worker.kill(StopRequested)
 
         gevent.signal(signal.SIGINT, request_stop)
         gevent.signal(signal.SIGTERM, request_stop)
@@ -76,7 +77,7 @@ class GeventWorker(Worker):
     def set_current_job_id(self, job_id, pipeline=None):
         pass
 
-    def work(self, burst=False):
+    def _work(self, burst=False):
         """Starts the work loop.
 
         Pops and performs all jobs on the current list of queues.  When all
@@ -90,19 +91,27 @@ class GeventWorker(Worker):
 
         self.did_perform_work = False
         self.register_birth()
-        self.log.info('RQ worker started, version %s' % VERSION)
-        self.set_state('starting')
+        self.log.info("RQ worker {0!r} started, version {1}".format(self.key, VERSION))
+        self.set_state(WorkerStatus.STARTED)
+
         try:
             while True:
-                if self.stopped:
-                    self.log.info('Stopping on request.')
-                    break
-
-                timeout = None if burst else max(1, self.default_worker_ttl - 60)
                 try:
-                    result = self.dequeue_job_and_maintain_ttl(timeout)
+                    self.check_for_suspension(burst)
 
+                    if self.should_run_maintenance_tasks:
+                        self.clean_registries()
+
+                    if self._stop_requested:
+                        self.log.info('Stopping on request.')
+                        break
+
+                    timeout = None if burst else max(1, self.default_worker_ttl - 60)
+
+                    result = self.dequeue_job_and_maintain_ttl(timeout)
                     if result is None and burst:
+                        self.log.info("RQ worker {0!r} done, quitting".format(self.key))
+
                         try:
                             # Make sure dependented jobs are enqueued.
                             get_hub().switch()
@@ -123,6 +132,19 @@ class GeventWorker(Worker):
                 self.register_death()
         return self.did_perform_work
 
+    def work(self, burst=False):
+        """
+        Spawning a greenlet to be able to kill it when it's blocked dequeueing job
+        :param burst: if it's burst worker don't need to spawn a greenlet
+        """
+        # If the is a burst worker it's not needed to spawn greenlet
+        if burst:
+            return self._work(burst)
+
+        self.gevent_worker = gevent.spawn(self._work, burst)
+        self.gevent_worker.join()
+        return self.gevent_worker.value
+
     def execute_job(self, job, queue):
         def job_done(child):
             self.did_perform_work = True
@@ -134,19 +156,19 @@ class GeventWorker(Worker):
         child_greenlet.link(job_done)
 
     def dequeue_job_and_maintain_ttl(self, timeout):
-        if self._stopped:
+        if self._stop_requested:
             raise StopRequested()
 
         result = None
         while True:
-            if self._stopped:
+            if self._stop_requested:
                 raise StopRequested()
 
             self.heartbeat()
 
             while self.gevent_pool.full():
                 gevent.sleep(0.1)
-                if self._stopped:
+                if self._stop_requested:
                     raise StopRequested()
 
             try:
@@ -165,7 +187,10 @@ class GeventWorker(Worker):
 
 def main():
     import sys
-    from rq.scripts.rqworker import main as rq_main
+    try:
+        from rq.scripts.rqworker import main as rq_main
+    except:
+        from rq.cli import worker as rq_main
 
     if '-w' in sys.argv or '--worker-class' in sys.argv:
         print("You cannot specify worker class when using this script,"
