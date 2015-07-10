@@ -15,7 +15,7 @@ from tests.fixtures import create_file_after_timeout, say_hello
 class TestGeventWorker(RQTestCase):
     def test_register_worker(self):
         """ensure pool size is registered."""
-        w = GeventWorker(Queue(), pool_size=10)
+        w = GeventWorker(Queue(), name="some_name", pool_size=10)
         w.register_birth()
         self.assertEqual(self.testconn.hget(w.key, 'pool_size'), '10')
 

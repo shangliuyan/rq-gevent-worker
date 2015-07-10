@@ -7,7 +7,7 @@ import pytest
 
 from rq import get_failed_queue, Queue
 from rq.compat import as_text
-from rq.job import Job, Status
+from rq.job import Job, JobStatus
 
 from rq_gevent_worker import GeventWorker as Worker
 from tests import RQTestCase, slow
@@ -223,14 +223,14 @@ class TestWorker(RQTestCase):
         w = Worker([q])
 
         job = q.enqueue(say_hello)
-        self.assertEqual(job.get_status(), Status.QUEUED)
+        self.assertEqual(job.get_status(), JobStatus.QUEUED)
         self.assertEqual(job.is_queued, True)
         self.assertEqual(job.is_finished, False)
         self.assertEqual(job.is_failed, False)
 
         w.work(burst=True)
         job = Job.fetch(job.id)
-        self.assertEqual(job.get_status(), Status.FINISHED)
+        self.assertEqual(job.get_status(), JobStatus.FINISHED)
         self.assertEqual(job.is_queued, False)
         self.assertEqual(job.is_finished, True)
         self.assertEqual(job.is_failed, False)
@@ -239,7 +239,7 @@ class TestWorker(RQTestCase):
         job = q.enqueue(div_by_zero, args=(1,))
         w.work(burst=True)
         job = Job.fetch(job.id)
-        self.assertEqual(job.get_status(), Status.FAILED)
+        self.assertEqual(job.get_status(), JobStatus.FAILED)
         self.assertEqual(job.is_queued, False)
         self.assertEqual(job.is_finished, False)
         self.assertEqual(job.is_failed, True)
@@ -252,13 +252,13 @@ class TestWorker(RQTestCase):
         job = q.enqueue_call(say_hello, depends_on=parent_job)
         w.work(burst=True)
         job = Job.fetch(job.id)
-        self.assertEqual(job.get_status(), Status.FINISHED)
+        self.assertEqual(job.get_status(), JobStatus.FINISHED)
 
         parent_job = q.enqueue(div_by_zero)
         job = q.enqueue_call(say_hello, depends_on=parent_job)
         w.work(burst=True)
         job = Job.fetch(job.id)
-        self.assertNotEqual(job.get_status(), Status.FINISHED)
+        self.assertNotEqual(job.get_status(), JobStatus.FINISHED)
 
     @pytest.mark.skipif(True, reason='GeventWorker do not support this method')
     def test_get_current_job(self):

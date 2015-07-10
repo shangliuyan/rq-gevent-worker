@@ -57,7 +57,7 @@ class GeventWorker(Worker):
             raise SystemExit()
 
         def request_stop():
-            if not self._stopped:
+            if not self._stop_requested:
                 gevent.signal(signal.SIGINT, request_force_stop)
                 gevent.signal(signal.SIGTERM, request_force_stop)
 
@@ -65,7 +65,7 @@ class GeventWorker(Worker):
                 self.log.warning('Stopping after all greenlets are finished. '
                                  'Press Ctrl+C again for a cold shutdown.')
 
-                self._stopped = True
+                self._stop_requested = True
                 self.gevent_pool.join()
 
             raise StopRequested()
@@ -94,7 +94,7 @@ class GeventWorker(Worker):
         self.set_state('starting')
         try:
             while True:
-                if self.stopped:
+                if self._stop_requested:
                     self.log.info('Stopping on request.')
                     break
 
@@ -134,19 +134,19 @@ class GeventWorker(Worker):
         child_greenlet.link(job_done)
 
     def dequeue_job_and_maintain_ttl(self, timeout):
-        if self._stopped:
+        if self._stop_requested:
             raise StopRequested()
 
         result = None
         while True:
-            if self._stopped:
+            if self._stop_requested:
                 raise StopRequested()
 
             self.heartbeat()
 
             while self.gevent_pool.full():
                 gevent.sleep(0.1)
-                if self._stopped:
+                if self._stop_requested:
                     raise StopRequested()
 
             try:
