@@ -15,7 +15,7 @@ try: # for rq >= 0.5.0
 except ImportError: # for rq <= 0.4.6 
     from rq.job import Status as JobStatus
 from rq.timeouts import BaseDeathPenalty, JobTimeoutException
-from rq.worker import StopRequested, green, blue
+from rq.worker import StopRequested, green, blue, WorkerStatus
 from rq.exceptions import DequeueTimeout
 from rq.logutils import setup_loghandlers
 from rq.version import VERSION
@@ -90,19 +90,27 @@ class GeventWorker(Worker):
 
         self.did_perform_work = False
         self.register_birth()
-        self.log.info('RQ worker started, version %s' % VERSION)
-        self.set_state('starting')
+        self.log.info("RQ worker {0!r} started, version {1}".format(self.key, VERSION))
+        self.set_state(WorkerStatus.STARTED)
+
         try:
             while True:
-                if self._stop_requested:
-                    self.log.info('Stopping on request.')
-                    break
-
-                timeout = None if burst else max(1, self.default_worker_ttl - 60)
                 try:
-                    result = self.dequeue_job_and_maintain_ttl(timeout)
+                    self.check_for_suspension(burst)
 
+                    if self.should_run_maintenance_tasks:
+                        self.clean_registries()
+
+                    if self._stop_requested:
+                        self.log.info('Stopping on request.')
+                        break
+
+                    timeout = None if burst else max(1, self.default_worker_ttl - 60)
+
+                    result = self.dequeue_job_and_maintain_ttl(timeout)
                     if result is None and burst:
+                        self.log.info("RQ worker {0!r} done, quitting".format(self.key))
+
                         try:
                             # Make sure dependented jobs are enqueued.
                             get_hub().switch()
