@@ -39,6 +39,7 @@ class GeventWorker(Worker):
         if 'pool_size' in kwargs:
             pool_size = kwargs.pop('pool_size')
         self.gevent_pool = gevent.pool.Pool(pool_size)
+        self.gevent_worker = None
         super(GeventWorker, self).__init__(*args, **kwargs)
 
     def register_birth(self):
@@ -67,8 +68,8 @@ class GeventWorker(Worker):
 
                 self._stop_requested = True
                 self.gevent_pool.join()
-
-            raise StopRequested()
+                if self.gevent_worker is not None:
+                    self.gevent_worker.kill(StopRequested)
 
         gevent.signal(signal.SIGINT, request_stop)
         gevent.signal(signal.SIGTERM, request_stop)
@@ -76,7 +77,7 @@ class GeventWorker(Worker):
     def set_current_job_id(self, job_id, pipeline=None):
         pass
 
-    def work(self, burst=False):
+    def _work(self, burst=False):
         """Starts the work loop.
 
         Pops and performs all jobs on the current list of queues.  When all
@@ -130,6 +131,19 @@ class GeventWorker(Worker):
             if not self.is_horse:
                 self.register_death()
         return self.did_perform_work
+
+    def work(self, burst=False):
+        """
+        Spawning a greenlet to be able to kill it when it's blocked dequeueing job
+        :param burst: if it's burst worker don't need to spawn a greenlet
+        """
+        # If the is a burst worker it's not needed to spawn greenlet
+        if burst:
+            return self._work(burst)
+
+        self.gevent_worker = gevent.spawn(self._work, burst)
+        self.gevent_worker.join()
+        return self.gevent_worker.value
 
     def execute_job(self, job, queue):
         def job_done(child):
