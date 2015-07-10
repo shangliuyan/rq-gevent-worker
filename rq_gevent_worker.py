@@ -173,7 +173,10 @@ class GeventWorker(Worker):
 
 def main():
     import sys
-    from rq.scripts.rqworker import main as rq_main
+    try:
+        from rq.scripts.rqworker import main as rq_main
+    except:
+        from rq.cli import worker as rq_main
 
     if '-w' in sys.argv or '--worker-class' in sys.argv:
         print("You cannot specify worker class when using this script,"
