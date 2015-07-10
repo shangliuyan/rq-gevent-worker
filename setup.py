@@ -39,5 +39,5 @@ setup(
     author_email='lyzhang87@gmail.com',
     description='Implement a new worker based on gevent',
     long_description=__doc__,
-    install_requires=['rq >= 0.4.6', 'gevent >= 1.0'],
+    install_requires=['rq >= 0.5.4', 'gevent >= 1.0'],
 )
