@@ -6,6 +6,7 @@ from gevent import monkey, get_hub
 from gevent.hub import LoopExit
 monkey.patch_all()
 
+import os
 import signal
 import gevent
 import gevent.pool
@@ -35,7 +36,8 @@ class GeventWorker(Worker):
     death_penalty_class = GeventDeathPenalty
 
     def __init__(self, *args, **kwargs):
-        pool_size = 20
+        pool_size = int(os.getenv("RQ_GEVENT_WORKERS", 20))
+
         if 'pool_size' in kwargs:
             pool_size = kwargs.pop('pool_size')
         self.gevent_pool = gevent.pool.Pool(pool_size)
@@ -94,6 +96,9 @@ class GeventWorker(Worker):
         self.log.info("RQ worker {0!r} started, version {1}".format(self.key, VERSION))
         self.set_state(WorkerStatus.STARTED)
 
+        self.log.info('')
+        self.log.info('*** Listening on {0}...'.format(green(', '.join(self.queue_names()))))
+
         try:
             while True:
                 try:
@@ -142,7 +147,9 @@ class GeventWorker(Worker):
             return self._work(burst)
 
         self.gevent_worker = gevent.spawn(self._work, burst)
+        self.log.info("Spawned a greenlet worker %s and joining to it", self.gevent_worker)
         self.gevent_worker.join()
+        self.log.info("Greenlet worker %s finished", self.gevent_worker)
         return self.gevent_worker.value
 
     def execute_job(self, job, queue):
@@ -153,6 +160,7 @@ class GeventWorker(Worker):
                 queue.enqueue_dependents(job)
 
         child_greenlet = self.gevent_pool.spawn(self.perform_job, job)
+        self.log.debug("execute job %s queue %s child %s", job, queue, child_greenlet)
         child_greenlet.link(job_done)
 
     def dequeue_job_and_maintain_ttl(self, timeout):
@@ -166,12 +174,17 @@ class GeventWorker(Worker):
 
             self.heartbeat()
 
-            while self.gevent_pool.full():
-                gevent.sleep(0.1)
-                if self._stop_requested:
-                    raise StopRequested()
+            if self.gevent_pool.full():
+                self.set_state(WorkerStatus.BUSY)
+
+                while self.gevent_pool.full():
+                    gevent.sleep(0.1)
+
+                    if self._stop_requested:
+                        raise StopRequested()
 
             try:
+                self.set_state(WorkerStatus.IDLE)
                 result = self.queue_class.dequeue_any(self.queues, timeout, connection=self.connection)
                 if result is not None:
                     job, queue = result
@@ -187,10 +200,7 @@ class GeventWorker(Worker):
 
 def main():
     import sys
-    try:
-        from rq.scripts.rqworker import main as rq_main
-    except:
-        from rq.cli import worker as rq_main
+    from rq.cli import worker as rq_main
 
     if '-w' in sys.argv or '--worker-class' in sys.argv:
         print("You cannot specify worker class when using this script,"
