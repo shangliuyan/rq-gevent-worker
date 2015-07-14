@@ -33,9 +33,10 @@ class GeventDeathPenalty(BaseDeathPenalty):
 
 class GeventWorker(Worker):
     death_penalty_class = GeventDeathPenalty
+    DEFAULT_POOL_SIZE = 20
 
     def __init__(self, *args, **kwargs):
-        pool_size = 20
+        pool_size = self.DEFAULT_POOL_SIZE
         if 'pool_size' in kwargs:
             pool_size = kwargs.pop('pool_size')
         self.gevent_pool = gevent.pool.Pool(pool_size)
@@ -187,10 +188,7 @@ class GeventWorker(Worker):
 
 def main():
     import sys
-    try:
-        from rq.scripts.rqworker import main as rq_main
-    except:
-        from rq.cli import worker as rq_main
+    from rq.cli import worker as rq_main
 
     if '-w' in sys.argv or '--worker-class' in sys.argv:
         print("You cannot specify worker class when using this script,"
