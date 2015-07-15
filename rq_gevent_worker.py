@@ -92,7 +92,8 @@ class GeventWorker(Worker):
 
         self.did_perform_work = False
         self.register_birth()
-        self.log.info("RQ worker {0!r} started, version {1}".format(self.key, VERSION))
+        self.log.info("RQ GEVENT worker (Greenlet pool size={0}) {1!r} started, version {2}".
+                      format(self.gevent_pool.size, self.key, VERSION))
         self.set_state(WorkerStatus.STARTED)
 
         try:
@@ -167,6 +168,10 @@ class GeventWorker(Worker):
 
             self.heartbeat()
 
+            if self.gevent_pool.full():
+                self.set_state(WorkerStatus.BUSY)
+                self.log.warning("RQ GEVENT worker greenlet pool empty current size %s", self.gevent_pool.size)
+
             while self.gevent_pool.full():
                 gevent.sleep(0.1)
                 if self._stop_requested:
@@ -174,6 +179,7 @@ class GeventWorker(Worker):
 
             try:
                 result = self.queue_class.dequeue_any(self.queues, timeout, connection=self.connection)
+                self.set_state(WorkerStatus.IDLE)
                 if result is not None:
                     job, queue = result
                     self.log.info('%s: %s (%s)' % (green(queue.name),
